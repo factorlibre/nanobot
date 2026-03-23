@@ -9,8 +9,9 @@ from typing import Any
 
 from nanobot.agent.memory import MemoryStore
 from nanobot.agent.skills import SkillsLoader
-from nanobot.utils.helpers import build_assistant_message, current_time_str, detect_image_mime
+from nanobot.agent.specialist import SpecialistLoader
 from nanobot.utils.prompt_templates import render_template
+from nanobot.utils.helpers import build_assistant_message, current_time_str, detect_image_mime
 
 
 class ContextBuilder:
@@ -26,6 +27,7 @@ class ContextBuilder:
         self.timezone = timezone
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace, disabled_skills=set(disabled_skills) if disabled_skills else None)
+        self.specialists = SpecialistLoader(workspace)
 
     def build_system_prompt(
         self,
@@ -59,6 +61,15 @@ class ContextBuilder:
             parts.append("# Recent History\n\n" + "\n".join(
                 f"- [{e['timestamp']}] {e['content']}" for e in capped
             ))
+
+        specialists_summary = self.specialists.build_specialists_summary()
+        if specialists_summary:
+            parts.append(f"""# Specialists
+
+Use the 'delegate' tool to assign domain-specific tasks to a specialist.
+Each specialist has its own expertise and will have access to conversation context and shared memory.
+
+{specialists_summary}""")
 
         return "\n\n---\n\n".join(parts)
 
