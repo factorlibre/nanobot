@@ -38,13 +38,16 @@ class SpecialistLoader:
                     content = soul_file.read_text(encoding="utf-8")
                     meta, body = self._parse_frontmatter(content)
                     if meta.get("name") and meta.get("description"):
-                        specialists.append({
+                        spec_data: dict = {
                             "name": meta["name"],
                             "description": meta["description"],
                             "model": meta.get("model") or None,
                             "max_iterations": int(meta.get("max_iterations", 25)),
                             "soul_content": body,
-                        })
+                        }
+                        if meta.get("triggers"):
+                            spec_data["triggers"] = meta["triggers"]
+                        specialists.append(spec_data)
         return specialists
 
     def load_specialist(self, name: str) -> dict | None:
@@ -55,13 +58,16 @@ class SpecialistLoader:
 
         content = soul_file.read_text(encoding="utf-8")
         meta, body = self._parse_frontmatter(content)
-        return {
+        spec_data: dict = {
             "name": meta.get("name", name),
             "description": meta.get("description", ""),
             "model": meta.get("model") or None,
             "max_iterations": int(meta.get("max_iterations", 25)),
             "soul_content": body,
         }
+        if meta.get("triggers"):
+            spec_data["triggers"] = meta["triggers"]
+        return spec_data
 
     def build_specialists_summary(self) -> str:
         """Build XML summary of available specialists (same format as skills)."""
@@ -77,6 +83,8 @@ class SpecialistLoader:
             lines.append("  <specialist>")
             lines.append(f"    <name>{escape_xml(spec['name'])}</name>")
             lines.append(f"    <description>{escape_xml(spec['description'])}</description>")
+            if spec.get("triggers"):
+                lines.append(f"    <triggers>{escape_xml(spec['triggers'])}</triggers>")
             lines.append("  </specialist>")
         lines.append("</specialists>")
         return "\n".join(lines)

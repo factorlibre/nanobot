@@ -19,6 +19,7 @@ from nanobot.agent.tools.delegate import DelegateTool
 
 def _create_specialist(workspace: Path, name: str, description: str = "A test specialist",
                        model: str | None = None, max_iterations: int = 25,
+                       triggers: str | None = None,
                        body: str = "You are a test specialist.") -> Path:
     """Create a specialist SOUL.md in the workspace and return its directory."""
     spec_dir = workspace / "specialists" / name
@@ -28,6 +29,8 @@ def _create_specialist(workspace: Path, name: str, description: str = "A test sp
         f"name: {name}",
         f'description: "{description}"',
     ]
+    if triggers:
+        frontmatter_lines.append(f'triggers: "{triggers}"')
     if model:
         frontmatter_lines.append(f"model: {model}")
     frontmatter_lines.append(f"max_iterations: {max_iterations}")
@@ -135,6 +138,36 @@ class TestSpecialistLoader:
         meta, body = SpecialistLoader._parse_frontmatter("Just plain content")
         assert meta == {}
         assert body == "Just plain content"
+
+    def test_triggers_in_list(self, tmp_path: Path) -> None:
+        _create_specialist(tmp_path, "ventas", triggers="buscar cliente, ver pedidos, stock")
+        loader = SpecialistLoader(tmp_path)
+        specs = loader.list_specialists()
+        assert specs[0]["triggers"] == "buscar cliente, ver pedidos, stock"
+
+    def test_triggers_absent_when_not_set(self, tmp_path: Path) -> None:
+        _create_specialist(tmp_path, "ventas")
+        loader = SpecialistLoader(tmp_path)
+        specs = loader.list_specialists()
+        assert "triggers" not in specs[0]
+
+    def test_triggers_in_load_specialist(self, tmp_path: Path) -> None:
+        _create_specialist(tmp_path, "ventas", triggers="pedidos, clientes")
+        loader = SpecialistLoader(tmp_path)
+        spec = loader.load_specialist("ventas")
+        assert spec["triggers"] == "pedidos, clientes"
+
+    def test_build_summary_includes_triggers(self, tmp_path: Path) -> None:
+        _create_specialist(tmp_path, "ventas", description="Ventas", triggers="buscar cliente, pedidos")
+        loader = SpecialistLoader(tmp_path)
+        summary = loader.build_specialists_summary()
+        assert "<triggers>buscar cliente, pedidos</triggers>" in summary
+
+    def test_build_summary_omits_triggers_when_absent(self, tmp_path: Path) -> None:
+        _create_specialist(tmp_path, "ventas", description="Ventas")
+        loader = SpecialistLoader(tmp_path)
+        summary = loader.build_specialists_summary()
+        assert "<triggers>" not in summary
 
 
 # ===========================================================================
