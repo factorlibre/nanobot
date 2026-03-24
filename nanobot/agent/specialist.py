@@ -47,6 +47,8 @@ class SpecialistLoader:
                         }
                         if meta.get("triggers"):
                             spec_data["triggers"] = meta["triggers"]
+                        if meta.get("tools_module"):
+                            spec_data["tools_module"] = meta["tools_module"]
                         specialists.append(spec_data)
         return specialists
 
@@ -67,6 +69,8 @@ class SpecialistLoader:
         }
         if meta.get("triggers"):
             spec_data["triggers"] = meta["triggers"]
+        if meta.get("tools_module"):
+            spec_data["tools_module"] = meta["tools_module"]
         return spec_data
 
     def build_specialists_summary(self) -> str:
@@ -149,7 +153,7 @@ class SpecialistRunner:
         logger.info("Specialist [{}] starting task: {}", name, task[:80])
 
         try:
-            tools = self._build_tools()
+            tools = self._build_tools(spec)
             system_prompt = self._build_specialist_prompt(spec, session_key)
 
             messages: list[dict[str, Any]] = [
@@ -300,7 +304,7 @@ Use it to understand the context of the task you've been delegated.
 
         return "\n".join(lines)
 
-    def _build_tools(self) -> ToolRegistry:
+    def _build_tools(self, spec: dict | None = None) -> ToolRegistry:
         """Build the tool registry for a specialist (same as subagent, no message/spawn/delegate)."""
         tools = ToolRegistry()
         allowed_dir = self.workspace if self.restrict_to_workspace else None
@@ -317,4 +321,24 @@ Use it to understand the context of the task you've been delegated.
         ))
         tools.register(WebSearchTool(config=self.web_search_config, proxy=self.web_proxy))
         tools.register(WebFetchTool(proxy=self.web_proxy))
+
+        # Load custom tools from specialist's tools_module
+        if spec and spec.get("tools_module"):
+            self._load_custom_tools(tools, spec["tools_module"])
+
         return tools
+
+    def _load_custom_tools(self, tools: ToolRegistry, module_path: str) -> None:
+        """Import a module and register the tools it exports via get_tools()."""
+        import importlib
+
+        try:
+            module = importlib.import_module(module_path)
+            if hasattr(module, "get_tools"):
+                for tool in module.get_tools():
+                    tools.register(tool)
+                logger.info("Loaded custom tools from {}", module_path)
+            else:
+                logger.warning("Module {} has no get_tools() function", module_path)
+        except Exception as e:
+            logger.error("Failed to load custom tools from {}: {}", module_path, e)

@@ -19,7 +19,7 @@ from nanobot.agent.tools.delegate import DelegateTool
 
 def _create_specialist(workspace: Path, name: str, description: str = "A test specialist",
                        model: str | None = None, max_iterations: int = 25,
-                       triggers: str | None = None,
+                       triggers: str | None = None, tools_module: str | None = None,
                        body: str = "You are a test specialist.") -> Path:
     """Create a specialist SOUL.md in the workspace and return its directory."""
     spec_dir = workspace / "specialists" / name
@@ -31,6 +31,8 @@ def _create_specialist(workspace: Path, name: str, description: str = "A test sp
     ]
     if triggers:
         frontmatter_lines.append(f'triggers: "{triggers}"')
+    if tools_module:
+        frontmatter_lines.append(f"tools_module: {tools_module}")
     if model:
         frontmatter_lines.append(f"model: {model}")
     frontmatter_lines.append(f"max_iterations: {max_iterations}")
@@ -181,6 +183,18 @@ class TestSpecialistLoader:
         loader = SpecialistLoader(tmp_path)
         summary = loader.build_specialists_summary()
         assert "<triggers>" not in summary
+
+    def test_tools_module_in_load_specialist(self, tmp_path: Path) -> None:
+        _create_specialist(tmp_path, "ventas", tools_module="my_package.tools")
+        loader = SpecialistLoader(tmp_path)
+        spec = loader.load_specialist("ventas")
+        assert spec["tools_module"] == "my_package.tools"
+
+    def test_tools_module_absent_when_not_set(self, tmp_path: Path) -> None:
+        _create_specialist(tmp_path, "ventas")
+        loader = SpecialistLoader(tmp_path)
+        spec = loader.load_specialist("ventas")
+        assert "tools_module" not in spec
 
 
 # ===========================================================================
@@ -557,6 +571,70 @@ class TestSpecialistRunner:
 
         system_msg = provider.chat_with_retry.call_args.kwargs["messages"][0]["content"]
         assert "my-private-tool" in system_msg
+
+    @pytest.mark.asyncio
+    async def test_tools_module_loads_custom_tools(self, tmp_path: Path, monkeypatch) -> None:
+        """tools_module in frontmatter should load custom tools into the specialist."""
+        _create_specialist(tmp_path, "custom-tools", tools_module="fake_tools_mod")
+
+        provider = MagicMock()
+        provider.get_default_model.return_value = "test-model"
+
+        from nanobot.providers.base import LLMResponse, ToolCallRequest
+
+        call_count = {"n": 0}
+
+        async def scripted_chat(*, messages, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return LLMResponse(
+                    content="",
+                    tool_calls=[ToolCallRequest(id="call_1", name="fake_tool", arguments={"q": "test"})],
+                )
+            return LLMResponse(content="got it", tool_calls=[])
+
+        provider.chat_with_retry = scripted_chat
+
+        # Create a fake tools module
+        from types import ModuleType
+        from nanobot.agent.tools.base import Tool
+
+        class FakeTool(Tool):
+            @property
+            def name(self): return "fake_tool"
+            @property
+            def description(self): return "A fake tool for testing"
+            @property
+            def parameters(self):
+                return {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]}
+            async def execute(self, q: str, **kw) -> str:
+                return f"fake result for {q}"
+
+        fake_mod = ModuleType("fake_tools_mod")
+        fake_mod.get_tools = lambda: [FakeTool()]
+        monkeypatch.setitem(__import__("sys").modules, "fake_tools_mod", fake_mod)
+
+        runner = SpecialistRunner(provider=provider, workspace=tmp_path)
+        result = await runner.run("custom-tools", "use the fake tool")
+        assert result == "got it"
+        assert call_count["n"] == 2
+
+    @pytest.mark.asyncio
+    async def test_tools_module_missing_logs_error(self, tmp_path: Path) -> None:
+        """A missing tools_module should not crash the specialist."""
+        _create_specialist(tmp_path, "bad-mod", tools_module="nonexistent_module_xyz")
+
+        provider = MagicMock()
+        provider.get_default_model.return_value = "test-model"
+
+        from nanobot.providers.base import LLMResponse
+        provider.chat_with_retry = AsyncMock(
+            return_value=LLMResponse(content="still works", tool_calls=[])
+        )
+
+        runner = SpecialistRunner(provider=provider, workspace=tmp_path)
+        result = await runner.run("bad-mod", "task")
+        assert result == "still works"
 
 
 # ===========================================================================
