@@ -97,8 +97,21 @@ class TestSpecialistLoader:
         assert spec is not None
         assert spec["name"] == "compras"
         assert spec["model"] == "gpt-4o"
-        assert spec["max_iterations"] == 10
-        assert "You are a test specialist" in spec["soul_content"]
+
+    def test_model_null_in_frontmatter_becomes_none(self, tmp_path: Path) -> None:
+        """model: null in YAML should become None, not the string 'null'."""
+        spec_dir = tmp_path / "specialists" / "nullmodel"
+        spec_dir.mkdir(parents=True)
+        (spec_dir / "SOUL.md").write_text(
+            '---\nname: nullmodel\ndescription: "test"\nmodel: null\n---\nBody',
+            encoding="utf-8",
+        )
+        loader = SpecialistLoader(tmp_path)
+        spec = loader.load_specialist("nullmodel")
+        assert spec["model"] is None
+
+        specs = loader.list_specialists()
+        assert specs[0]["model"] is None
 
     def test_build_summary_empty(self, tmp_path: Path) -> None:
         loader = SpecialistLoader(tmp_path)

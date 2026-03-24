@@ -41,7 +41,7 @@ class SpecialistLoader:
                         spec_data: dict = {
                             "name": meta["name"],
                             "description": meta["description"],
-                            "model": meta.get("model") or None,
+                            "model": meta.get("model") if meta.get("model") not in (None, "", "null") else None,
                             "max_iterations": int(meta.get("max_iterations", 25)),
                             "soul_content": body,
                         }
@@ -61,7 +61,7 @@ class SpecialistLoader:
         spec_data: dict = {
             "name": meta.get("name", name),
             "description": meta.get("description", ""),
-            "model": meta.get("model") or None,
+            "model": meta.get("model") if meta.get("model") not in (None, "", "null") else None,
             "max_iterations": int(meta.get("max_iterations", 25)),
             "soul_content": body,
         }
