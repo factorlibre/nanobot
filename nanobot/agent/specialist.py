@@ -47,8 +47,6 @@ class SpecialistLoader:
                         }
                         if meta.get("triggers"):
                             spec_data["triggers"] = meta["triggers"]
-                        if meta.get("tools_module"):
-                            spec_data["tools_module"] = meta["tools_module"]
                         specialists.append(spec_data)
         return specialists
 
@@ -69,8 +67,6 @@ class SpecialistLoader:
         }
         if meta.get("triggers"):
             spec_data["triggers"] = meta["triggers"]
-        if meta.get("tools_module"):
-            spec_data["tools_module"] = meta["tools_module"]
         return spec_data
 
     def build_specialists_summary(self) -> str:
@@ -153,8 +149,9 @@ class SpecialistRunner:
         logger.info("Specialist [{}] starting task: {}", name, task[:80])
 
         try:
-            tools = self._build_tools(spec)
-            system_prompt = self._build_specialist_prompt(spec, session_key)
+            skills_loader = self._build_skills_loader(spec)
+            tools = self._build_tools(skills_loader)
+            system_prompt = self._build_specialist_prompt(spec, session_key, skills_loader)
 
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},
@@ -215,7 +212,15 @@ class SpecialistRunner:
             logger.error("Specialist [{}] failed: {}", name, e)
             return f"Error executing specialist '{name}': {e}"
 
-    def _build_specialist_prompt(self, spec: dict, session_key: str | None) -> str:
+    def _build_skills_loader(self, spec: dict) -> SkillsLoader:
+        """Build a SkillsLoader scoped to this specialist (shared + private skills)."""
+        specialist_skills_dir = self.workspace / "specialists" / spec["name"] / "skills"
+        extra = [specialist_skills_dir] if specialist_skills_dir.exists() else []
+        return SkillsLoader(self.workspace, shared_only=True, extra_skills_dirs=extra)
+
+    def _build_specialist_prompt(
+        self, spec: dict, session_key: str | None, skills_loader: SkillsLoader,
+    ) -> str:
         """Build the system prompt for a specialist agent."""
         from nanobot.agent.context import ContextBuilder
 
@@ -244,11 +249,8 @@ Use it to understand the context of the task you've been delegated.
 
 {history_text}""")
 
-        # Skills summary (shared workspace skills + specialist's private skills)
-        specialist_skills_dir = self.workspace / "specialists" / spec["name"] / "skills"
-        extra = [specialist_skills_dir] if specialist_skills_dir.exists() else []
-        skills = SkillsLoader(self.workspace, shared_only=True, extra_skills_dirs=extra)
-        skills_summary = skills.build_skills_summary()
+        # Skills summary
+        skills_summary = skills_loader.build_skills_summary()
         if skills_summary:
             parts.append(f"## Skills\n\nRead SKILL.md with read_file to use a skill.\n\n{skills_summary}")
 
@@ -304,8 +306,8 @@ Use it to understand the context of the task you've been delegated.
 
         return "\n".join(lines)
 
-    def _build_tools(self, spec: dict | None = None) -> ToolRegistry:
-        """Build the tool registry for a specialist (same as subagent, no message/spawn/delegate)."""
+    def _build_tools(self, skills_loader: SkillsLoader) -> ToolRegistry:
+        """Build the tool registry for a specialist (standard + skill tools)."""
         tools = ToolRegistry()
         allowed_dir = self.workspace if self.restrict_to_workspace else None
         extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
@@ -322,9 +324,14 @@ Use it to understand the context of the task you've been delegated.
         tools.register(WebSearchTool(config=self.web_search_config, proxy=self.web_proxy))
         tools.register(WebFetchTool(proxy=self.web_proxy))
 
-        # Load custom tools from specialist's tools_module
-        if spec and spec.get("tools_module"):
-            self._load_custom_tools(tools, spec["tools_module"])
+        # Load custom tools declared in skills' tools_module frontmatter
+        seen_modules: set[str] = set()
+        for skill_info in skills_loader.list_skills(filter_unavailable=False):
+            meta = skills_loader.get_skill_metadata(skill_info["name"]) or {}
+            module_path = meta.get("tools_module")
+            if module_path and module_path not in seen_modules:
+                seen_modules.add(module_path)
+                self._load_custom_tools(tools, module_path)
 
         return tools
 
@@ -336,7 +343,8 @@ Use it to understand the context of the task you've been delegated.
             module = importlib.import_module(module_path)
             if hasattr(module, "get_tools"):
                 for tool in module.get_tools():
-                    tools.register(tool)
+                    if not tools.get(tool.name):
+                        tools.register(tool)
                 logger.info("Loaded custom tools from {}", module_path)
             else:
                 logger.warning("Module {} has no get_tools() function", module_path)

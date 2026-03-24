@@ -19,7 +19,7 @@ from nanobot.agent.tools.delegate import DelegateTool
 
 def _create_specialist(workspace: Path, name: str, description: str = "A test specialist",
                        model: str | None = None, max_iterations: int = 25,
-                       triggers: str | None = None, tools_module: str | None = None,
+                       triggers: str | None = None,
                        body: str = "You are a test specialist.") -> Path:
     """Create a specialist SOUL.md in the workspace and return its directory."""
     spec_dir = workspace / "specialists" / name
@@ -31,8 +31,6 @@ def _create_specialist(workspace: Path, name: str, description: str = "A test sp
     ]
     if triggers:
         frontmatter_lines.append(f'triggers: "{triggers}"')
-    if tools_module:
-        frontmatter_lines.append(f"tools_module: {tools_module}")
     if model:
         frontmatter_lines.append(f"model: {model}")
     frontmatter_lines.append(f"max_iterations: {max_iterations}")
@@ -44,13 +42,15 @@ def _create_specialist(workspace: Path, name: str, description: str = "A test sp
 
 
 def _create_skill(base_dir: Path, name: str, description: str = "A skill",
-                  shared: bool | None = None) -> Path:
+                  shared: bool | None = None, tools_module: str | None = None) -> Path:
     """Create a SKILL.md under base_dir/{name}/ and return the skill directory."""
     skill_dir = base_dir / name
     skill_dir.mkdir(parents=True, exist_ok=True)
     lines = ["---", f"name: {name}", f'description: "{description}"']
     if shared is not None:
         lines.append(f"shared: {str(shared).lower()}")
+    if tools_module:
+        lines.append(f"tools_module: {tools_module}")
     lines += ["---", "", f"# {name} skill instructions"]
     (skill_dir / "SKILL.md").write_text("\n".join(lines), encoding="utf-8")
     return skill_dir
@@ -184,17 +184,6 @@ class TestSpecialistLoader:
         summary = loader.build_specialists_summary()
         assert "<triggers>" not in summary
 
-    def test_tools_module_in_load_specialist(self, tmp_path: Path) -> None:
-        _create_specialist(tmp_path, "ventas", tools_module="my_package.tools")
-        loader = SpecialistLoader(tmp_path)
-        spec = loader.load_specialist("ventas")
-        assert spec["tools_module"] == "my_package.tools"
-
-    def test_tools_module_absent_when_not_set(self, tmp_path: Path) -> None:
-        _create_specialist(tmp_path, "ventas")
-        loader = SpecialistLoader(tmp_path)
-        spec = loader.load_specialist("ventas")
-        assert "tools_module" not in spec
 
 
 # ===========================================================================
@@ -573,9 +562,10 @@ class TestSpecialistRunner:
         assert "my-private-tool" in system_msg
 
     @pytest.mark.asyncio
-    async def test_tools_module_loads_custom_tools(self, tmp_path: Path, monkeypatch) -> None:
-        """tools_module in frontmatter should load custom tools into the specialist."""
-        _create_specialist(tmp_path, "custom-tools", tools_module="fake_tools_mod")
+    async def test_skill_tools_module_loads_custom_tools(self, tmp_path: Path, monkeypatch) -> None:
+        """tools_module in SKILL.md should load custom tools into the specialist."""
+        spec_dir = _create_specialist(tmp_path, "custom-tools")
+        _create_skill(spec_dir / "skills", "my-skill", tools_module="fake_tools_mod")
 
         provider = MagicMock()
         provider.get_default_model.return_value = "test-model"
@@ -620,9 +610,10 @@ class TestSpecialistRunner:
         assert call_count["n"] == 2
 
     @pytest.mark.asyncio
-    async def test_tools_module_missing_logs_error(self, tmp_path: Path) -> None:
-        """A missing tools_module should not crash the specialist."""
-        _create_specialist(tmp_path, "bad-mod", tools_module="nonexistent_module_xyz")
+    async def test_skill_tools_module_missing_logs_error(self, tmp_path: Path) -> None:
+        """A missing tools_module in a skill should not crash the specialist."""
+        spec_dir = _create_specialist(tmp_path, "bad-mod")
+        _create_skill(spec_dir / "skills", "broken-skill", tools_module="nonexistent_module_xyz")
 
         provider = MagicMock()
         provider.get_default_model.return_value = "test-model"
@@ -635,6 +626,89 @@ class TestSpecialistRunner:
         runner = SpecialistRunner(provider=provider, workspace=tmp_path)
         result = await runner.run("bad-mod", "task")
         assert result == "still works"
+
+    @pytest.mark.asyncio
+    async def test_shared_skill_tools_module_loaded(self, tmp_path: Path, monkeypatch) -> None:
+        """tools_module from a shared workspace skill should be loaded by the specialist."""
+        _create_specialist(tmp_path, "stock-spec")
+        # Shared skill in workspace/skills/
+        _create_skill(tmp_path / "skills", "stock-tools", tools_module="fake_stock_mod")
+
+        provider = MagicMock()
+        provider.get_default_model.return_value = "test-model"
+
+        from nanobot.providers.base import LLMResponse
+        provider.chat_with_retry = AsyncMock(
+            return_value=LLMResponse(content="ok", tool_calls=[])
+        )
+
+        from types import ModuleType
+        from nanobot.agent.tools.base import Tool
+
+        class StockTool(Tool):
+            @property
+            def name(self): return "check_stock"
+            @property
+            def description(self): return "Check stock"
+            @property
+            def parameters(self):
+                return {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]}
+            async def execute(self, q: str, **kw) -> str:
+                return "in stock"
+
+        fake_mod = ModuleType("fake_stock_mod")
+        fake_mod.get_tools = lambda: [StockTool()]
+        monkeypatch.setitem(__import__("sys").modules, "fake_stock_mod", fake_mod)
+
+        runner = SpecialistRunner(provider=provider, workspace=tmp_path)
+        result = await runner.run("stock-spec", "check stock")
+        assert result == "ok"
+
+        # Verify the tool was in the tools list sent to LLM
+        call_kwargs = provider.chat_with_retry.call_args.kwargs
+        tool_names = [t["function"]["name"] for t in call_kwargs["tools"]]
+        assert "check_stock" in tool_names
+
+    @pytest.mark.asyncio
+    async def test_duplicate_tool_from_multiple_skills_not_registered_twice(self, tmp_path: Path, monkeypatch) -> None:
+        """If two skills provide the same tool name, it should only be registered once."""
+        spec_dir = _create_specialist(tmp_path, "multi-skill")
+        _create_skill(spec_dir / "skills", "skill-a", tools_module="fake_mod_a")
+        _create_skill(spec_dir / "skills", "skill-b", tools_module="fake_mod_b")
+
+        provider = MagicMock()
+        provider.get_default_model.return_value = "test-model"
+
+        from nanobot.providers.base import LLMResponse
+        provider.chat_with_retry = AsyncMock(
+            return_value=LLMResponse(content="ok", tool_calls=[])
+        )
+
+        from types import ModuleType
+        from nanobot.agent.tools.base import Tool
+
+        class SharedTool(Tool):
+            @property
+            def name(self): return "shared_tool"
+            @property
+            def description(self): return "Shared"
+            @property
+            def parameters(self):
+                return {"type": "object", "properties": {}}
+            async def execute(self, **kw) -> str:
+                return "ok"
+
+        for mod_name in ("fake_mod_a", "fake_mod_b"):
+            mod = ModuleType(mod_name)
+            mod.get_tools = lambda: [SharedTool()]
+            monkeypatch.setitem(__import__("sys").modules, mod_name, mod)
+
+        runner = SpecialistRunner(provider=provider, workspace=tmp_path)
+        await runner.run("multi-skill", "task")
+
+        call_kwargs = provider.chat_with_retry.call_args.kwargs
+        tool_names = [t["function"]["name"] for t in call_kwargs["tools"]]
+        assert tool_names.count("shared_tool") == 1
 
 
 # ===========================================================================
