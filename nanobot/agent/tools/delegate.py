@@ -51,10 +51,11 @@ class DelegateTool(Tool):
     async def execute(self, specialist: str, task: str, **kwargs: Any) -> str:
         """Delegate the task to the named specialist and return the result."""
         try:
-            return await self._runner.run(
+            result = await self._runner.run(
                 name=specialist,
                 task=task,
                 session_key=self._session_key,
             )
+            return f"[Specialist: {specialist.upper()}]\n\n{result}"
         except Exception as e:
             return f"Error delegating to specialist '{specialist}': {e}"
