@@ -227,12 +227,17 @@ class SpecialistRunner:
         time_ctx = ContextBuilder._build_runtime_context(None, None)
         parts = [f"""# Specialist: {spec['name']}
 
-{time_ctx}
+{time_ctx}"""]
 
-{spec['soul_content']}
+        # Shared base directives for all specialists
+        base_file = self.workspace / "SPECIALISTS.md"
+        if base_file.exists():
+            parts.append(base_file.read_text(encoding="utf-8"))
+
+        parts.append(f"""{spec['soul_content']}
 
 ## Workspace
-{self.workspace}"""]
+{self.workspace}""")
 
         # Shared memory (read-only)
         memory_ctx = self.memory.get_memory_context()
