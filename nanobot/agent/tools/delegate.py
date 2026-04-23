@@ -14,10 +14,17 @@ class DelegateTool(Tool):
     def __init__(self, runner: "SpecialistRunner"):
         self._runner = runner
         self._session_key: str | None = None
+        self._channel: str | None = None
+        self._sender_id: str | None = None
 
-    def set_context(self, channel: str, chat_id: str) -> None:
+    def set_context(
+        self, channel: str, chat_id: str,
+        *, sender_id: str | None = None,
+    ) -> None:
         """Set the session key for passing conversation context to the specialist."""
         self._session_key = f"{channel}:{chat_id}"
+        self._channel = channel
+        self._sender_id = sender_id
 
     @property
     def name(self) -> str:
@@ -55,6 +62,8 @@ class DelegateTool(Tool):
                 name=specialist,
                 task=task,
                 session_key=self._session_key,
+                channel=self._channel,
+                sender_id=self._sender_id,
             )
             return f"[Specialist: {specialist.upper()}]\n\n{result}"
         except Exception as e:

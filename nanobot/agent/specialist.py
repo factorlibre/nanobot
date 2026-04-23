@@ -13,6 +13,7 @@ from nanobot.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTo
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
+from nanobot.agent.user_profiles import UserProfileLoader
 from nanobot.config.schema import ExecToolConfig
 from nanobot.providers.base import LLMProvider
 from nanobot.session.manager import SessionManager
@@ -136,8 +137,12 @@ class SpecialistRunner:
 
         self.loader = SpecialistLoader(workspace)
         self.memory = MemoryStore(workspace)
+        self.user_profiles = UserProfileLoader(workspace)
 
-    async def run(self, name: str, task: str, session_key: str | None = None) -> str:
+    async def run(
+        self, name: str, task: str, session_key: str | None = None,
+        channel: str | None = None, sender_id: str | None = None,
+    ) -> str:
         """Execute a specialist agent and return its final response."""
         spec = self.loader.load_specialist(name)
         if spec is None:
@@ -151,7 +156,10 @@ class SpecialistRunner:
         try:
             skills_loader = self._build_skills_loader(spec)
             tools = self._build_tools(skills_loader)
-            system_prompt = self._build_specialist_prompt(spec, session_key, skills_loader)
+            system_prompt = self._build_specialist_prompt(
+                spec, session_key, skills_loader,
+                channel=channel, sender_id=sender_id,
+            )
 
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},
@@ -220,11 +228,12 @@ class SpecialistRunner:
 
     def _build_specialist_prompt(
         self, spec: dict, session_key: str | None, skills_loader: SkillsLoader,
+        *, channel: str | None = None, sender_id: str | None = None,
     ) -> str:
         """Build the system prompt for a specialist agent."""
         from nanobot.agent.context import ContextBuilder
 
-        time_ctx = ContextBuilder._build_runtime_context(None, None)
+        time_ctx = ContextBuilder._build_runtime_context(None, None, sender_id=sender_id)
         parts = [f"""# Specialist: {spec['name']}
 
 {time_ctx}"""]
@@ -238,6 +247,11 @@ class SpecialistRunner:
 
 ## Workspace
 {self.workspace}""")
+
+        # Private per-user context (same as main agent)
+        user_profile = self.user_profiles.load(channel, sender_id)
+        if user_profile:
+            parts.append(user_profile)
 
         # Shared memory (read-only)
         memory_ctx = self.memory.get_memory_context()

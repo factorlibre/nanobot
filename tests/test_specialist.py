@@ -351,6 +351,7 @@ class TestDelegateTool:
 
         runner.run.assert_called_once_with(
             name="ventas", task="price of X?", session_key="cli:direct",
+            channel="cli", sender_id=None,
         )
         assert "[Specialist: VENTAS]" in result
         assert "specialist result" in result
