@@ -28,18 +28,27 @@ class UserProfileLoader:
         self.workspace = workspace
         self.users_dir = workspace / "users"
         self.map_file = self.users_dir / "_map.yaml"
+        self._cache: dict[str, str] = {}
+        self._cache_mtime: float | None = None
 
     def _read_map(self) -> dict[str, str]:
+        """Return the parsed mapping, cached and invalidated by file mtime."""
         if not self.map_file.exists():
-            return {}
+            self._cache, self._cache_mtime = {}, None
+            return self._cache
+        mtime = self.map_file.stat().st_mtime
+        if mtime == self._cache_mtime:
+            return self._cache
         try:
             data = yaml.safe_load(self.map_file.read_text(encoding="utf-8"))
         except yaml.YAMLError as e:
             logger.warning("Invalid users/_map.yaml: {}", e)
-            return {}
+            data = {}
         if not isinstance(data, dict):
-            return {}
-        return {str(k): str(v) for k, v in data.items()}
+            data = {}
+        self._cache = {str(k): str(v) for k, v in data.items()}
+        self._cache_mtime = mtime
+        return self._cache
 
     def resolve(self, channel: str | None, sender_id: str | None) -> str | None:
         """Return the folder name mapped to ``(channel, sender_id)`` or None."""

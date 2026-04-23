@@ -68,7 +68,6 @@ class SkillsLoader:
             List of skill info dicts with 'name', 'path', 'source'.
         """
         skills = []
-        seen_names: set[str] = set()
         if self.extra_skills_dirs:
             for extra_dir in self.extra_skills_dirs:
                 skills.extend(
@@ -242,16 +241,16 @@ class SkillsLoader:
         if not path.exists():
             return None
         content = path.read_text(encoding="utf-8")
-        if content.startswith("---"):
-            match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
-            if match:
-                metadata: dict[str, str] = {}
-                for line in match.group(1).split("\n"):
-                    if ":" in line:
-                        key, value = line.split(":", 1)
-                        metadata[key.strip()] = value.strip().strip('"\'')
-                return metadata
-        return None
+        if not content.startswith("---"):
+            return None
+        match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
+        if not match:
+            return None
+        try:
+            parsed = yaml.safe_load(match.group(1)) or {}
+        except yaml.YAMLError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
 
     def _check_requirements(self, skill_meta: dict) -> bool:
         """Check if skill requirements are met (bins, env vars)."""

@@ -5,7 +5,13 @@ import re
 from pathlib import Path
 from typing import Any
 
+import yaml
 from loguru import logger
+
+# Valid Python module path: dotted identifiers (e.g. "pkg.sub.mod").
+# Blocks dashes, path traversal, non-ASCII, leading dots, and other
+# unsafe forms an attacker might plant in a SKILL.md frontmatter.
+_MODULE_PATH_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 
 from nanobot.agent.memory import MemoryStore
 from nanobot.agent.skills import BUILTIN_SKILLS_DIR, SkillsLoader
@@ -100,11 +106,11 @@ class SpecialistLoader:
         if not match:
             return {}, content
 
-        metadata: dict[str, str] = {}
-        for line in match.group(1).split("\n"):
-            if ":" in line:
-                key, value = line.split(":", 1)
-                metadata[key.strip()] = value.strip().strip('"\'')
+        try:
+            parsed = yaml.safe_load(match.group(1)) or {}
+        except yaml.YAMLError:
+            parsed = {}
+        metadata = parsed if isinstance(parsed, dict) else {}
 
         body = content[match.end():].strip()
         return metadata, body
@@ -216,9 +222,9 @@ class SpecialistRunner:
             logger.info("Specialist [{}] completed successfully", name)
             return final_result
 
-        except Exception as e:
-            logger.error("Specialist [{}] failed: {}", name, e)
-            return f"Error executing specialist '{name}': {e}"
+        except Exception:
+            logger.exception("Specialist [{}] failed", name)
+            return f"Error executing specialist '{name}'. Check logs for details."
 
     def _build_skills_loader(self, spec: dict) -> SkillsLoader:
         """Build a SkillsLoader scoped to this specialist (shared + private skills)."""
@@ -358,6 +364,12 @@ Use it to understand the context of the task you've been delegated.
         """Import a module and register the tools it exports via get_tools()."""
         import importlib
 
+        if not _MODULE_PATH_RE.match(module_path):
+            logger.error(
+                "Refusing to import tools_module with invalid name: {!r}", module_path,
+            )
+            return
+
         try:
             module = importlib.import_module(module_path)
             if hasattr(module, "get_tools"):
@@ -367,5 +379,5 @@ Use it to understand the context of the task you've been delegated.
                 logger.info("Loaded custom tools from {}", module_path)
             else:
                 logger.warning("Module {} has no get_tools() function", module_path)
-        except Exception as e:
-            logger.error("Failed to load custom tools from {}: {}", module_path, e)
+        except Exception:
+            logger.exception("Failed to load custom tools from {}", module_path)

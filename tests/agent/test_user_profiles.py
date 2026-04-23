@@ -99,3 +99,37 @@ class TestLoad:
         (users_dir / "_map.yaml").write_text(": : :\nnot valid", encoding="utf-8")
         loader = UserProfileLoader(tmp_path)
         assert loader.load("telegram", "1") == ""
+
+
+class TestMapCache:
+    def test_map_is_cached_across_calls(self, tmp_path: Path) -> None:
+        _write_map(tmp_path, {"telegram:1": "emp"})
+        loader = UserProfileLoader(tmp_path)
+        loader.resolve("telegram", "1")
+        original_read_text = Path.read_text
+        calls = {"n": 0}
+
+        def counting_read_text(self, *args, **kwargs):
+            calls["n"] += 1
+            return original_read_text(self, *args, **kwargs)
+
+        Path.read_text = counting_read_text
+        try:
+            for _ in range(5):
+                loader.resolve("telegram", "1")
+        finally:
+            Path.read_text = original_read_text
+        assert calls["n"] == 0, "cached reads should not hit the filesystem"
+
+    def test_map_cache_invalidates_on_mtime_change(self, tmp_path: Path) -> None:
+        import os
+        _write_map(tmp_path, {"telegram:1": "first"})
+        loader = UserProfileLoader(tmp_path)
+        assert loader.resolve("telegram", "1") == "first"
+
+        _write_map(tmp_path, {"telegram:1": "second"})
+        # Force mtime forward in case the two writes land in the same OS tick.
+        map_file = tmp_path / "users" / "_map.yaml"
+        stat = map_file.stat()
+        os.utime(map_file, (stat.st_atime, stat.st_mtime + 1))
+        assert loader.resolve("telegram", "1") == "second"

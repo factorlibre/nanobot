@@ -474,7 +474,8 @@ class TestSpecialistRunner:
         assert "Hello specialist world" in system_msg
 
     @pytest.mark.asyncio
-    async def test_run_catches_exception(self, tmp_path: Path) -> None:
+    async def test_run_catches_exception(self, tmp_path: Path, caplog) -> None:
+        import logging
         _create_specialist(tmp_path, "fail-spec")
 
         provider = MagicMock()
@@ -482,9 +483,13 @@ class TestSpecialistRunner:
         provider.chat_with_retry = AsyncMock(side_effect=RuntimeError("LLM exploded"))
 
         runner = SpecialistRunner(provider=provider, workspace=tmp_path)
-        result = await runner.run("fail-spec", "task")
+        with caplog.at_level(logging.ERROR):
+            result = await runner.run("fail-spec", "task")
+
+        # User-facing message is short and doesn't leak exception details.
         assert "Error" in result
-        assert "LLM exploded" in result
+        assert "fail-spec" in result
+        assert "LLM exploded" not in result
 
     @pytest.mark.asyncio
     async def test_run_with_tool_calls(self, tmp_path: Path, monkeypatch) -> None:
@@ -628,6 +633,35 @@ class TestSpecialistRunner:
         runner = SpecialistRunner(provider=provider, workspace=tmp_path)
         result = await runner.run("bad-mod", "task")
         assert result == "still works"
+
+        # Built-in tools must remain registered even when a skill's tools_module fails.
+        tools = runner._build_tools(runner._build_skills_loader(
+            runner.loader.load_specialist("bad-mod")
+        ))
+        for name in ("read_file", "write_file", "edit_file", "list_dir", "exec"):
+            assert tools.get(name) is not None, f"built-in tool {name!r} should still be registered"
+
+    @pytest.mark.asyncio
+    async def test_tools_module_invalid_name_is_rejected(self, tmp_path: Path) -> None:
+        """A malformed tools_module name must be refused before importlib is called."""
+        spec_dir = _create_specialist(tmp_path, "shady-spec")
+        # Path-traversal-ish name that should never reach importlib.import_module.
+        _create_skill(spec_dir / "skills", "shady", tools_module="../evil")
+
+        provider = MagicMock()
+        provider.get_default_model.return_value = "test-model"
+
+        from nanobot.providers.base import LLMResponse
+        provider.chat_with_retry = AsyncMock(
+            return_value=LLMResponse(content="ok", tool_calls=[])
+        )
+
+        with patch("importlib.import_module") as mock_import:
+            runner = SpecialistRunner(provider=provider, workspace=tmp_path)
+            result = await runner.run("shady-spec", "task")
+
+        assert result == "ok"
+        mock_import.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_shared_skill_tools_module_loaded(self, tmp_path: Path, monkeypatch) -> None:
