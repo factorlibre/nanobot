@@ -102,17 +102,20 @@ class SkillsLoader:
         Returns:
             Skill content or None if not found.
         """
-        roots = [self.workspace_skills]
+        roots: list[tuple[Path, bool]] = [(self.workspace_skills, True)]
         if self.extra_skills_dirs:
-            roots.extend(self.extra_skills_dirs)
+            roots.extend((d, False) for d in self.extra_skills_dirs)
         if self.builtin_skills:
-            roots.append(self.builtin_skills)
-        for root in roots:
+            roots.append((self.builtin_skills, False))
+        for root, check_shared in roots:
             path = root / name / "SKILL.md"
-            if path.exists():
-                if self.shared_only and not self._is_shared(name):
-                    pass  # skip non-shared workspace skills for specialists
-                return path.read_text(encoding="utf-8")
+            if not path.exists():
+                continue
+            # shared_only only gates workspace skills — extra dirs belong to the
+            # specialist itself and builtins are globally available.
+            if check_shared and self.shared_only and not self._is_shared(name):
+                continue
+            return path.read_text(encoding="utf-8")
         return None
 
     def load_skills_for_context(self, skill_names: list[str]) -> str:
