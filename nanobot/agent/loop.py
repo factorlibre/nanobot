@@ -104,20 +104,27 @@ class _LoopHook(AgentHook):
 
     async def before_execute_tools(self, context: AgentHookContext) -> None:
         if self._on_progress:
-            if not self._on_stream:
-                thought = self._loop._strip_think(
-                    context.response.content if context.response else None
-                )
-                if thought:
-                    await self._on_progress(thought)
-            tool_hint = self._loop._strip_think(self._loop._tool_hint(context.tool_calls))
-            tool_events = [build_tool_event_start_payload(tc) for tc in context.tool_calls]
-            await invoke_on_progress(
-                self._on_progress,
-                tool_hint,
-                tool_hint=True,
-                tool_events=tool_events,
+           # Suppress progress text for delegate calls — the specialist's
+            # result will be reformulated by the main agent, so showing
+            # "I'll ask the specialist" every time is redundant.
+            is_delegate_only = bool(context.tool_calls) and all(
+                tc.name == "delegate" for tc in context.tool_calls
             )
+            if not is_delegate_only:
+                if not self._on_stream:
+                    thought = self._loop._strip_think(
+                        context.response.content if context.response else None
+                    )
+                    if thought:
+                        await self._on_progress(thought)
+                tool_hint = self._loop._strip_think(self._loop._tool_hint(context.tool_calls))
+                tool_events = [build_tool_event_start_payload(tc) for tc in context.tool_calls]
+                await invoke_on_progress(
+                    self._on_progress,
+                    tool_hint,
+                    tool_hint=True,
+                    tool_events=tool_events,
+                )
         for tc in context.tool_calls:
             args_str = json.dumps(tc.arguments, ensure_ascii=False)
             logger.info("Tool call: {}({})", tc.name, args_str[:200])
