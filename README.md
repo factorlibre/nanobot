@@ -21,6 +21,8 @@
 
 🐈 **nanobot** is an open-source and ultra-lightweight AI agent in the spirit of [OpenClaw](https://github.com/openclaw/openclaw), [Claude Code](https://www.anthropic.com/claude-code), and [Codex](https://www.openai.com/codex/). It keeps the core agent loop small and readable while still supporting chat channels, memory, MCP and practical deployment paths, so you can go from local setup to a long-running personal agent with minimal overhead.
 
+> **Este es un fork** de [`HKUDS/nanobot`](https://github.com/HKUDS/nanobot) con funcionalidades adicionales (especialistas, conocimiento privado por empleado, aislamiento de skills, etc.). Ver [docs/fork-changes.md](./docs/fork-changes.md) para el listado completo de diferencias.
+
 ## 📢 News
 
 - **2026-04-21** 🚀 Released **v0.1.5.post2** — Windows & Python 3.14 support, Office document reading, SSE streaming for the OpenAI-compatible API, and stronger reliability across sessions, memory, and channels. Please see [release notes](https://github.com/HKUDS/nanobot/releases/tag/v0.1.5.post2) for details.
@@ -260,6 +262,7 @@ Browse the [repo docs](./docs/README.md) for the latest features and GitHub deve
 - Configure providers, web search, MCP, and runtime behavior: [Configuration](./docs/configuration.md)
 - Integrate nanobot with local tools and automations: [OpenAI-Compatible API](./docs/openai-api.md) · [Python SDK](./docs/python-sdk.md)
 - Run nanobot with Docker or as a Linux service: [Deployment](./docs/deployment.md)
+- Diferencias de este fork frente a upstream: [Fork changes](./docs/fork-changes.md)
 
 ## 🤖 Specialists
 
