@@ -26,11 +26,20 @@ class SkillsLoader:
     specific tools or perform certain tasks.
     """
 
-    def __init__(self, workspace: Path, builtin_skills_dir: Path | None = None, disabled_skills: set[str] | None = None):
+    def __init__(
+        self,
+        workspace: Path,
+        builtin_skills_dir: Path | None = None,
+        disabled_skills: set[str] | None = None,
+        extra_skills_dirs: list[Path] | None = None,
+        shared_only: bool = False,
+    ):
         self.workspace = workspace
         self.workspace_skills = workspace / "skills"
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
         self.disabled_skills = disabled_skills or set()
+        self.extra_skills_dirs = extra_skills_dirs or []
+        self.shared_only = shared_only
 
     def _skill_entries_from_dir(self, base: Path, source: str, *, skip_names: set[str] | None = None) -> list[dict[str, str]]:
         if not base.exists():
@@ -58,15 +67,25 @@ class SkillsLoader:
         Returns:
             List of skill info dicts with 'name', 'path', 'source'.
         """
-        skills = self._skill_entries_from_dir(self.workspace_skills, "workspace")
-        workspace_names = {entry["name"] for entry in skills}
+        skills = []
+        if self.extra_skills_dirs:
+            for extra_dir in self.extra_skills_dirs:
+                skills.extend(
+                    self._skill_entries_from_dir(extra_dir, "extra")
+                )
+        seen_names = {s["name"] for s in skills}
+        skills.extend(self._skill_entries_from_dir(self.workspace_skills, "workspace", skip_names=seen_names))
+        seen_names = {s["name"] for s in skills}
         if self.builtin_skills and self.builtin_skills.exists():
             skills.extend(
-                self._skill_entries_from_dir(self.builtin_skills, "builtin", skip_names=workspace_names)
+                self._skill_entries_from_dir(self.builtin_skills, "builtin", skip_names=seen_names)
             )
 
         if self.disabled_skills:
             skills = [s for s in skills if s["name"] not in self.disabled_skills]
+        # Filter non-shared workspace skills when running for a specialist
+        if self.shared_only:
+            skills = [s for s in skills if s["source"] != "workspace" or self._is_shared(s["name"])]
 
         if filter_unavailable:
             return [skill for skill in skills if self._check_requirements(self._get_skill_meta(skill["name"]))]
@@ -82,13 +101,22 @@ class SkillsLoader:
         Returns:
             Skill content or None if not found.
         """
-        roots = [self.workspace_skills]
+        # Extra dirs (specialist's own) take precedence over workspace,
+        # then builtins. shared_only only gates workspace — extra dirs belong
+        # to the specialist and builtins are globally available.
+        roots: list[tuple[Path, bool]] = []
+        if self.extra_skills_dirs:
+            roots.extend((d, False) for d in self.extra_skills_dirs)
+        roots.append((self.workspace_skills, True))
         if self.builtin_skills:
-            roots.append(self.builtin_skills)
-        for root in roots:
+            roots.append((self.builtin_skills, False))
+        for root, check_shared in roots:
             path = root / name / "SKILL.md"
-            if path.exists():
-                return path.read_text(encoding="utf-8")
+            if not path.exists():
+                continue
+            if check_shared and self.shared_only and not self._is_shared(name):
+                continue
+            return path.read_text(encoding="utf-8")
         return None
 
     def load_skills_for_context(self, skill_names: list[str]) -> str:
@@ -185,6 +213,44 @@ class SkillsLoader:
             return {}
         payload = data.get("nanobot", data.get("openclaw", {}))
         return payload if isinstance(payload, dict) else {}
+
+    def _is_shared(self, name: str) -> bool:
+        """Check if a workspace skill is shared with specialists.
+
+        A skill is shared unless its frontmatter explicitly sets shared to false,
+        either as a top-level key or inside nanobot metadata JSON.
+
+        Reads the workspace file directly to avoid recursion with load_skill.
+        """
+        meta = self._read_workspace_skill_metadata(name) or {}
+        # Top-level frontmatter: shared: false
+        if str(meta.get("shared", "")).lower() == "false":
+            return False
+        # Nested nanobot metadata: {"nanobot": {"shared": false}}
+        skill_meta = self._parse_nanobot_metadata(meta.get("metadata", ""))
+        if str(skill_meta.get("shared", "")).lower() == "false":
+            return False
+        return True
+
+    def _read_workspace_skill_metadata(self, name: str) -> dict | None:
+        """Read frontmatter metadata directly from the workspace skill file.
+
+        This bypasses load_skill() to avoid recursion when called from _is_shared().
+        """
+        path = self.workspace_skills / name / "SKILL.md"
+        if not path.exists():
+            return None
+        content = path.read_text(encoding="utf-8")
+        if not content.startswith("---"):
+            return None
+        match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
+        if not match:
+            return None
+        try:
+            parsed = yaml.safe_load(match.group(1)) or {}
+        except yaml.YAMLError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
 
     def _check_requirements(self, skill_meta: dict) -> bool:
         """Check if skill requirements are met (bins, env vars)."""
